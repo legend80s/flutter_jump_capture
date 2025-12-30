@@ -106,7 +106,7 @@ class _MyHomePageState extends State<MyHomePage> {
           children: [
             OutlinedButton(
               onPressed: _incrementCounter,
-              child: Text('1 Click me You have pushed the button this many times:'),
+              child: Text('2 Click me You have pushed the button this many times:'),
 
             ),
             Text(

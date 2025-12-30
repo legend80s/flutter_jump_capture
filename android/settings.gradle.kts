@@ -11,6 +11,12 @@ pluginManagement {
     includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
 
     repositories {
+        // fix flutter run 超时 Gradle 在尝试从网络下载依赖时连接超时
+        // 替换为阿里云镜像
+        // maven { url 'https://maven.aliyun.com/repository/google' }
+        // maven { url 'https://maven.aliyun.com/repository/public' }
+        // maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+
         google()
         mavenCentral()
         gradlePluginPortal()
