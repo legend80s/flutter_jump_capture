@@ -716,7 +716,7 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
 
       // 切换到新模式
       _currentMode = newMode;
-      print('[JC] 成功切换模式到: $_currentMode → $newMode');
+      print('[JC] ✅ 成功切换模式到: $_currentMode → $newMode');
 
       // 初始化新模式
       _initializeNewMode(newMode);
@@ -819,6 +819,7 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           // 大图标
+          const SizedBox(height: 20),
           Icon(Icons.video_library, size: 80, color: Colors.grey[400]),
           const SizedBox(height: 20),
 
@@ -866,12 +867,16 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
       type: FileType.video,
       allowMultiple: false,
     );
-
+    //  I/flutter (24819): [JC] _pickVideo result: FilePickerResult(files: [PlatformFile(path /data/user/0/com.example.jump_capture/cache/file_picker/1767172255419/一位女性面向镜头，原地起跳整
+    // 个过程，稍稍屈膝，双脚离地，在空中双手双脚张开，然后落下，整个过程大笑，跳跃姿势自然。_.mp4, name: 一位女性面向镜头，原地起跳整个过程，稍稍屈膝，双脚离地，在空中双手双脚张开，然后落下
+    // ，整个过程大笑，跳跃姿势自然。_.mp4, bytes: null, readStream: null, size: 3196709)])
     print('[JC] _pickVideo result: $result');
 
     if (result != null && result.files.isNotEmpty) {
       final filePath = result.files.single.path!;
-      print('[JC] _pickVideo filePath: $filePath');
+      // I/flutter (24819): [JC] _pickVideo filePath: /data/user/0/com.example.jump_capture/cache/file_picker/1767172255419/一位女性面向镜头，原地起跳整个过程，稍稍屈膝，双脚离地，在空中双手双
+      // 脚张开，然后落下，整个过程大笑，跳跃姿势自然。_.mp4
+      print('[JC] _pickVideo filePath: [$filePath]');
 
       _selectedVideoPath = filePath; // 保存路径
 
