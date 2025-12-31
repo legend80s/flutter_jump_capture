@@ -50,6 +50,10 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
   bool _isCameraInitialized = false;
   Size _imageSize = Size.zero;
 
+  // --- 超时控制 ---
+  Timer? _calibrationTimer; // 用于校准超时的计时器
+  static const int calibrationTimeoutSeconds = 10; // 校准超时时间（秒）
+
   final _orientations = {
     DeviceOrientation.portraitUp: 0,
     DeviceOrientation.landscapeLeft: 90,
@@ -262,6 +266,8 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
       _updateStatus('校准完成！准备起跳！', Colors.green);
       // 切换到检测状态，等待跳跃
       setState(() => _captureState = CaptureState.detecting);
+
+      _cancelCalibrationTimer(); // 【新增】校准成功，取消超时计时
     }
   }
 
@@ -310,6 +316,8 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
 
   /// 重置抓拍状态，准备下一次拍摄
   void _resetCaptureState() {
+    _cancelCalibrationTimer(); // 【新增】确保计时器被清理
+
     if (mounted) {
       setState(() {
         _captureState = CaptureState.idle;
@@ -381,6 +389,39 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
     _resetCaptureState();
     _updateStatus('请保持站立姿势，正在校准地面基线...', Colors.orange);
     setState(() => _captureState = CaptureState.calibrating);
+
+    // 【新增】启动校准超时计时器
+    _startCalibrationTimer();
+  }
+
+  /// 启动校准超时计时器
+  void _startCalibrationTimer() {
+    _cancelCalibrationTimer(); // 先取消之前的计时器（如果有）
+    _calibrationTimer = Timer(
+      const Duration(seconds: calibrationTimeoutSeconds),
+      _onCalibrationTimeout,
+    );
+  }
+
+  /// 校准超时回调
+  void _onCalibrationTimeout() {
+    if (!mounted || _captureState != CaptureState.calibrating) return;
+    if (_captureState == CaptureState.calibrating) {
+      // 如果超时时仍在校准状态，说明检测失败
+      String message;
+      // 这里可以根据其他条件判断，比如是否根本没有图像流等
+      // 目前我们简单判断为检测失败
+      message = '无法检测到人体姿态，请确保：\n1. 全身在取景框内\n2. 光线充足\n3. 面向摄像头';
+      _updateStatus(message, Colors.red);
+
+      _resetCaptureState(); // 重置状态，允许用户再次点击
+    }
+  }
+
+  /// 取消校准计时器
+  void _cancelCalibrationTimer() {
+    _calibrationTimer?.cancel();
+    _calibrationTimer = null;
   }
 
   /// 根据当前状态，返回按钮的文本
@@ -407,6 +448,8 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
 
   @override
   void dispose() {
+    _cancelCalibrationTimer(); // 清理计时器
+
     _controller?.stopImageStream();
     _poseDetector.close();
     _controller?.dispose();
