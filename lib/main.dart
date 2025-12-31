@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:ui';
+import 'dart:ui' as ui;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
@@ -8,6 +8,11 @@ import 'package:path_provider/path_provider.dart'
 import 'package:image/image.dart' as img;
 import 'dart:io';
 import 'package:flutter/services.dart';
+import 'package:video_player/video_player.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:video_thumbnail/video_thumbnail.dart' as thumbnail;
+
+enum AppMode { liveCamera, videoAnalysis }
 
 // 全局变量，用于在main函数中获取相机列表
 List<CameraDescription> cameras = [];
@@ -43,6 +48,15 @@ class JumpCaptureHomePage extends StatefulWidget {
 // --- 跳跃检测状态机 ---
 enum CaptureState { idle, calibrating, detecting, capturing, success }
 
+// 分析结果数据结构
+class VideoJumpResult {
+  final Duration timestamp; // 跳跃发生的时间点
+  final double jumpHeight; // 估算的跳跃高度
+  final File? snapshot; // 跳跃最高点的截图
+
+  VideoJumpResult(this.timestamp, this.jumpHeight, this.snapshot);
+}
+
 /// 主页状态类，包含所有核心逻辑
 class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
   // --- 相机控制 ---
@@ -61,6 +75,19 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
     DeviceOrientation.landscapeRight: 270,
   };
 
+  // 模式控制
+  AppMode _currentMode = AppMode.liveCamera; // 默认模式
+
+  // --- 视频分析模式相关 ---
+  String? _selectedVideoPath; // 保存用户选择的视频路径
+
+  VideoPlayerController? _videoController;
+  bool _isVideoInitialized = false;
+  bool _isAnalyzingVideo = false;
+  double _videoAnalysisProgress = 0.0;
+  List<VideoJumpResult> _jumpResults = []; // 存储分析结果
+  // ----------------------
+
   // --- 姿态检测 ---
   final PoseDetector _poseDetector = PoseDetector(
     options: PoseDetectorOptions(),
@@ -71,7 +98,7 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
   CaptureState _captureState = CaptureState.idle; // 当前状态
 
   // --- 地面基线校准 ---
-  static const int calibrationFrameCount = 30; // 校准采样帧数
+  static const int _calibrationFrameCount = 30; // 校准采样帧数
   List<double> _ankleSamples = []; // 脚踝Y坐标采样列表
   double _groundBaseline = 0.0; // 计算得到的地面基线
   double _jumpThreshold = 25.0; // 离地判断阈值（像素）
@@ -255,7 +282,7 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
 
     _ankleSamples.add(ankleY);
     final int collected = _ankleSamples.length;
-    final int total = calibrationFrameCount;
+    final int total = _calibrationFrameCount;
 
     // 更新UI进度
     _updateStatus('校准中... ($collected/$total)', Colors.orange);
@@ -450,6 +477,7 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
   void dispose() {
     _cancelCalibrationTimer(); // 清理计时器
 
+    _videoController?.dispose();
     _controller?.stopImageStream();
     _poseDetector.close();
     _controller?.dispose();
@@ -459,58 +487,76 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('跳跃抓拍'), backgroundColor: _statusColor),
-      body: Column(
-        children: [
-          // 状态显示栏
-          Container(
-            padding: const EdgeInsets.all(12),
-            color: _statusColor.withOpacity(0.1),
-            child: Row(
-              children: [
-                Icon(_getStatusIcon(), color: _statusColor),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    _statusText,
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: _statusColor,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-                if (_groundBaseline > 0)
-                  Text(
-                    '基线: ${_groundBaseline.toStringAsFixed(1)}',
-                    style: const TextStyle(fontSize: 14, color: Colors.grey),
-                  ),
-              ],
-            ),
-          ),
-
-          // 相机预览与骨骼点绘制层
-          Expanded(child: _buildCameraPreview()),
-
-          // 控制按钮区域
-          Padding(
-            padding: const EdgeInsets.all(20.0),
-            child: SizedBox(
-              width: double.infinity,
-              height: 60,
-              child: FilledButton.icon(
-                onPressed: _isButtonEnabled() ? _onCaptureButtonPressed : null,
-                icon: Icon(_getButtonIcon()),
-                label: Text(
-                  _getButtonText(),
-                  style: const TextStyle(fontSize: 20),
+      appBar: AppBar(
+        title: const Text('跳跃抓拍'),
+        backgroundColor: _statusColor,
+        actions: [
+          PopupMenuButton<AppMode>(
+            onSelected: (mode) => _switchMode(mode),
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: AppMode.liveCamera,
+                child: Row(
+                  children: [
+                    Icon(Icons.camera_alt, size: 20),
+                    SizedBox(width: 8),
+                    Text('实时抓拍模式'),
+                  ],
                 ),
               ),
-            ),
+              const PopupMenuItem(
+                value: AppMode.videoAnalysis,
+                child: Row(
+                  children: [
+                    Icon(Icons.video_library, size: 20),
+                    SizedBox(width: 8),
+                    Text('视频分析模式'),
+                  ],
+                ),
+              ),
+            ],
+            icon: const Icon(Icons.menu),
           ),
         ],
       ),
+      body: Column(
+        children: [
+          _buildStatusBar(),
+          Expanded(child: _buildMainContent()),
+          _buildControlButtons(),
+        ],
+      ),
     );
+  }
+
+  Widget _buildStatusBar() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      color: _statusColor.withOpacity(0.1),
+      child: Row(
+        children: [
+          Icon(_getStatusIcon(), color: _statusColor),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(_statusText, style: TextStyle(color: _statusColor)),
+          ),
+          if (_groundBaseline > 0)
+            Text(
+              '基线: ${_groundBaseline.toStringAsFixed(1)}',
+              style: const TextStyle(color: Colors.grey),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMainContent() {
+    switch (_currentMode) {
+      case AppMode.liveCamera:
+        return _buildCameraPreview();
+      case AppMode.videoAnalysis:
+        return _buildVideoAnalysisView();
+    }
   }
 
   /// 构建相机预览和骨骼点叠加层
@@ -527,6 +573,731 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
         ),
       ],
     );
+  }
+
+  Widget _buildVideoAnalysisView() {
+    return Column(
+      children: [
+        // 视频预览
+        if (_videoController != null && _isVideoInitialized)
+          AspectRatio(
+            aspectRatio: _videoController!.value.aspectRatio,
+            child: VideoPlayer(_videoController!),
+          )
+        else
+          _buildVideoPlaceholder(),
+
+        // 分析进度
+        if (_isAnalyzingVideo)
+          LinearProgressIndicator(value: _videoAnalysisProgress),
+
+        // 分析结果
+        if (_jumpResults.isNotEmpty) Expanded(child: _buildJumpResultsList()),
+      ],
+    );
+  }
+
+  // Widget _buildVideoPlaceholder() {
+  //   return Center(
+  //     child: Column(
+  //       mainAxisAlignment: MainAxisAlignment.center,
+  //       children: [
+  //         Icon(Icons.video_library, size: 80, color: Colors.grey[400]),
+  //         const SizedBox(height: 20),
+  //         const Text('尚未选择视频', style: TextStyle(color: Colors.grey)),
+  //         const SizedBox(height: 10),
+  //         FilledButton.icon(
+  //           onPressed: _pickVideo,
+  //           icon: const Icon(Icons.upload_file),
+  //           label: const Text('选择视频文件'),
+  //         ),
+  //       ],
+  //     ),
+  //   );
+  // }
+
+  Widget _buildControlButtons() {
+    switch (_currentMode) {
+      case AppMode.liveCamera:
+        return _buildCameraControls();
+      case AppMode.videoAnalysis:
+        return _buildVideoControls();
+    }
+  }
+
+  Widget _buildCameraControls() {
+    return Padding(
+      padding: const EdgeInsets.all(20.0),
+      child: SizedBox(
+        width: double.infinity,
+        height: 60,
+        child: FilledButton.icon(
+          onPressed: _isButtonEnabled() ? _onCaptureButtonPressed : null,
+          icon: Icon(_getButtonIcon()),
+          label: Text(_getButtonText(), style: const TextStyle(fontSize: 20)),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVideoControls() {
+    if (_videoController == null || !_isVideoInitialized) {
+      return const SizedBox();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.all(20.0),
+      child: Column(
+        children: [
+          // 播放控制
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              IconButton(
+                icon: Icon(
+                  _videoController!.value.isPlaying
+                      ? Icons.pause
+                      : Icons.play_arrow,
+                ),
+                onPressed: () {
+                  _videoController!.value.isPlaying
+                      ? _videoController!.pause()
+                      : _videoController!.play();
+                },
+              ),
+              const SizedBox(width: 20),
+
+              // 分析按钮
+              if (!_isAnalyzingVideo)
+                FilledButton.icon(
+                  onPressed: _analyzeVideo,
+                  icon: const Icon(Icons.analytics),
+                  label: const Text('分析视频'),
+                )
+              else
+                OutlinedButton(
+                  onPressed: null,
+                  child: Row(
+                    children: [
+                      const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      const SizedBox(width: 8),
+                      Text('分析中 ${(_videoAnalysisProgress * 100).toInt()}%'),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 切换应用模式（实时相机 ↔ 视频分析）
+  void _switchMode(AppMode newMode) {
+    print('[JC] 尝试切换模式到: $_currentMode → $newMode');
+
+    // 如果正在分析中，不允许切换模式
+    if (_isAnalyzingVideo ||
+        (_captureState != CaptureState.idle &&
+            _captureState != CaptureState.success)) {
+      _updateStatus('请先完成当前操作', Colors.orange);
+      return;
+    }
+
+    if (_currentMode == newMode) return; // 已经是目标模式
+
+    setState(() {
+      // 清理当前模式资源
+      _cleanupCurrentMode();
+
+      // 切换到新模式
+      _currentMode = newMode;
+      print('[JC] 成功切换模式到: $_currentMode → $newMode');
+
+      // 初始化新模式
+      _initializeNewMode(newMode);
+    });
+  }
+
+  /// 清理当前模式的资源
+  void _cleanupCurrentMode() {
+    switch (_currentMode) {
+      case AppMode.liveCamera:
+        // 停止相机流
+        _controller?.stopImageStream();
+        // 重置抓拍状态
+        _resetCaptureState();
+        break;
+      case AppMode.videoAnalysis:
+        // 停止视频播放
+        _videoController?.pause();
+        // 清理视频分析状态
+        _isAnalyzingVideo = false;
+        _videoAnalysisProgress = 0.0;
+        _jumpResults.clear();
+        break;
+    }
+  }
+
+  /// 初始化新模式的资源
+  void _initializeNewMode(AppMode mode) {
+    switch (mode) {
+      case AppMode.liveCamera:
+        // 重新启动相机流
+        if (_controller != null && _isCameraInitialized) {
+          _startImageStream();
+        }
+        _updateStatus('已切换到实时相机模式', Colors.blue);
+        break;
+      case AppMode.videoAnalysis:
+        // 视频模式初始化
+        _updateStatus('已切换到视频分析模式，请选择视频文件', Colors.blue);
+        break;
+    }
+  }
+
+  Widget _buildJumpResultsList() {
+    return ListView.builder(
+      itemCount: _jumpResults.length,
+      itemBuilder: (context, index) {
+        final result = _jumpResults[index];
+        return ListTile(
+          leading: const Icon(Icons.arrow_upward, color: Colors.green),
+          title: Text('跳跃 ${index + 1}'),
+          subtitle: Text('时间: ${_formatDuration(result.timestamp)}'),
+          trailing: Text('${result.jumpHeight.toStringAsFixed(1)}像素'),
+          onTap: () => _seekToJump(result.timestamp),
+        );
+      },
+    );
+  }
+
+  /// 将Duration格式化为易读的时间字符串 (MM:SS.ms)
+  String _formatDuration(Duration duration) {
+    final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    final milliseconds = duration.inMilliseconds
+        .remainder(1000)
+        .toString()
+        .padLeft(3, '0');
+
+    return '$minutes:${seconds}.$milliseconds';
+  }
+
+  /// 跳转到视频的指定跳跃时间点
+  Future<void> _seekToJump(Duration timestamp) async {
+    if (_videoController == null || !_isVideoInitialized) return;
+
+    try {
+      await _videoController!.seekTo(timestamp);
+
+      // 可选：如果是视频分析模式，自动播放几秒
+      if (_currentMode == AppMode.videoAnalysis) {
+        _videoController!.play();
+        // 3秒后暂停，方便查看跳跃瞬间
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted && _videoController != null) {
+            _videoController!.pause();
+          }
+        });
+      }
+
+      _updateStatus('已跳转到跳跃时间点: ${_formatDuration(timestamp)}', Colors.blue);
+    } catch (e) {
+      _updateStatus('跳转失败: $e', Colors.red);
+    }
+  }
+
+  /// 构建视频分析模式的占位界面（当没有选择视频时显示）
+  Widget _buildVideoPlaceholder() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          // 大图标
+          Icon(Icons.video_library, size: 80, color: Colors.grey[400]),
+          const SizedBox(height: 20),
+
+          // 提示文本
+          Text(
+            '尚未选择视频',
+            style: TextStyle(
+              fontSize: 18,
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          Text(
+            '请点击下方按钮选择要分析的视频文件',
+            style: TextStyle(fontSize: 14, color: Colors.grey[500]),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 30),
+
+          // 选择视频按钮（直接放在占位图中也很方便）
+          FilledButton.icon(
+            onPressed: _pickVideo, // 确保你已经实现了_pickVideo方法
+            icon: const Icon(Icons.upload_file),
+            label: const Text('选择视频文件'),
+          ),
+
+          // 或者使用更视觉化的按钮
+          // OutlinedButton(
+          //   onPressed: _pickVideo,
+          //   child: const Padding(
+          //     padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          //     child: Text('选择要分析的视频'),
+          //   ),
+          // ),
+        ],
+      ),
+    );
+  }
+
+  /// 选择视频文件
+  Future<void> _pickVideo() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.video,
+      allowMultiple: false,
+    );
+
+    print('[JC] _pickVideo result: $result');
+
+    if (result != null && result.files.isNotEmpty) {
+      final filePath = result.files.single.path!;
+      print('[JC] _pickVideo filePath: $filePath');
+
+      _selectedVideoPath = filePath; // 保存路径
+
+      _loadVideo(File(filePath));
+    }
+  }
+
+  /// 加载视频文件
+  Future<void> _loadVideo(File videoFile) async {
+    _videoController?.dispose();
+    _videoController = VideoPlayerController.file(videoFile);
+
+    try {
+      await _videoController!.initialize();
+      setState(() => _isVideoInitialized = true);
+      _updateStatus('视频加载成功！点击"分析视频"开始', Colors.blue);
+    } catch (e) {
+      _updateStatus('视频加载失败: $e', Colors.red);
+    }
+  }
+
+  // begin
+
+  /// 核心：分析视频中的跳跃动作（基于video_thumbnail优化版）
+  Future<void> _analyzeVideo() async {
+    print('[JC] _analyzeVideo');
+
+    // ========== 1. 前置检查 ==========
+    if (_videoController == null || _isAnalyzingVideo || !_isVideoInitialized) {
+      _updateStatus('视频未就绪，无法分析', Colors.red);
+      return;
+    }
+
+    // 获取视频文件路径
+    final String? videoPath = _getVideoPath();
+    if (videoPath == null || !File(videoPath).existsSync()) {
+      _updateStatus('无法获取视频文件', Colors.red);
+      return;
+    }
+
+    // ========== 2. 初始化分析状态 ==========
+    setState(() {
+      _isAnalyzingVideo = true;
+      _jumpResults.clear();
+      _videoAnalysisProgress = 0.0;
+    });
+
+    // 跳跃检测状态
+    bool isCalibrated = false;
+    double groundBaseline = 0.0;
+    List<double> ankleSamples = [];
+
+    // 分析参数配置
+    final videoDuration = _videoController!.value.duration;
+    final int totalSeconds = videoDuration.inSeconds;
+
+    if (totalSeconds < 2) {
+      _updateStatus('视频太短（至少需要2秒）', Colors.red);
+      setState(() => _isAnalyzingVideo = false);
+      return;
+    }
+
+    // 优化：每秒分析3帧（平衡性能与准确性）
+    const int framesPerSecond = 3;
+    final int totalFrames = totalSeconds * framesPerSecond;
+    int processedFrames = 0;
+    int jumpCount = 0;
+
+    // 分析开始时间戳（用于计算耗时）
+    final analysisStartTime = DateTime.now();
+
+    _updateStatus('开始分析视频... 0%', Colors.orange);
+
+    // ========== 3. 逐帧分析主循环 ==========
+    try {
+      for (int second = 0; second < totalSeconds; second++) {
+        // 检查是否被取消或页面已卸载
+        if (!mounted || !_isAnalyzingVideo) {
+          _updateStatus('分析已中断', Colors.orange);
+          return;
+        }
+
+        for (
+          int frameInSecond = 0;
+          frameInSecond < framesPerSecond;
+          frameInSecond++
+        ) {
+          // 计算当前帧的时间位置
+          final Duration position = Duration(
+            seconds: second,
+            milliseconds: (frameInSecond * (1000 / framesPerSecond)).toInt(),
+          );
+
+          // 3.1 提取视频帧
+          final ui.Image? videoFrame = await _getVideoFrameAtPosition(
+            videoPath,
+            position,
+            quality: 60, // 60%质量足够姿态检测
+            maxWidth: 480, // 限制宽度提高速度
+          );
+
+          if (videoFrame == null) {
+            // 帧提取失败，跳过但继续处理
+            processedFrames++;
+            continue;
+          }
+
+          // 3.2 转换为InputImage
+          final InputImage? inputImage = await _convertVideoFrameToInputImage(
+            videoFrame,
+          );
+          videoFrame.dispose(); // 及时释放资源
+
+          if (inputImage == null) {
+            processedFrames++;
+            continue;
+          }
+
+          // 3.3 姿态检测
+          try {
+            final List<Pose> poses = await _poseDetector.processImage(
+              inputImage,
+            );
+
+            if (poses.isNotEmpty) {
+              final Pose pose = poses.first;
+              final PoseLandmark? leftAnkle =
+                  pose.landmarks[PoseLandmarkType.leftAnkle];
+              final PoseLandmark? rightAnkle =
+                  pose.landmarks[PoseLandmarkType.rightAnkle];
+
+              if (leftAnkle != null && rightAnkle != null) {
+                final double currentAnkleY = (leftAnkle.y + rightAnkle.y) / 2.0;
+
+                // 3.4 跳跃检测逻辑
+                if (!isCalibrated) {
+                  // 校准阶段：前1.5秒用于校准
+                  if (second < 1.5) {
+                    ankleSamples.add(currentAnkleY);
+
+                    // 收集足够样本后计算基线
+                    if (ankleSamples.length >= 8) {
+                      // 约1.5秒的数据
+                      groundBaseline =
+                          ankleSamples.reduce((a, b) => a + b) /
+                          ankleSamples.length;
+                      isCalibrated = true;
+                      _updateStatus(
+                        '校准完成！基线: ${groundBaseline.toStringAsFixed(1)}',
+                        Colors.green,
+                      );
+                    }
+                  }
+                } else {
+                  // 检测阶段：判断是否跳跃
+                  final double heightDiff = _calculateJumpHeight(
+                    groundBaseline,
+                    currentAnkleY,
+                  );
+
+                  // 跳跃判断条件：脚踝显著高于基线，且保持一定连续性
+                  if (heightDiff > _jumpThreshold && heightDiff < 150) {
+                    // 限制最大差异避免误判
+                    // 检查是否是新的跳跃（避免同一跳跃多次记录）
+                    final bool isNewJump =
+                        _jumpResults.isEmpty ||
+                        (position - _jumpResults.last.timestamp)
+                                .inMilliseconds >
+                            500;
+
+                    if (isNewJump) {
+                      jumpCount++;
+
+                      // 计算跳跃高度（像素单位）
+                      final double jumpHeight = heightDiff;
+
+                      // 保存结果
+                      _jumpResults.add(
+                        VideoJumpResult(
+                          position,
+                          jumpHeight,
+                          await _captureFrameSnapshot(
+                            videoPath,
+                            position,
+                            jumpHeight,
+                          ),
+                        ),
+                      );
+
+                      // 实时反馈
+                      if (mounted) {
+                        _updateStatus(
+                          '发现第$jumpCount次跳跃！高度: ${jumpHeight.toStringAsFixed(1)}像素',
+                          Colors.green,
+                        );
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            print('姿态检测失败（帧 $processedFrames）: $e');
+            // 单个帧失败不影响整体分析
+          }
+
+          // 3.5 更新进度
+          processedFrames++;
+          final double progress = processedFrames / totalFrames;
+
+          if (mounted) {
+            setState(() {
+              _videoAnalysisProgress = progress;
+            });
+
+            // 每处理10%或发现跳跃时更新状态
+            if (processedFrames % (totalFrames ~/ 10) == 0 ||
+                jumpCount > _jumpResults.length) {
+              _updateStatus(
+                '分析中... ${(progress * 100).toInt()}% '
+                '已发现 $jumpCount 次跳跃',
+                Colors.orange,
+              );
+            }
+          }
+        }
+
+        // 每分析3秒，短暂暂停避免过热/卡顿
+        if (second % 3 == 0 && second > 0) {
+          await Future.delayed(const Duration(milliseconds: 30));
+        }
+      }
+
+      // ========== 4. 分析完成 ==========
+      final analysisDuration = DateTime.now().difference(analysisStartTime);
+
+      if (mounted) {
+        setState(() => _isAnalyzingVideo = false);
+
+        if (_jumpResults.isEmpty) {
+          _updateStatus(
+            '分析完成（耗时 ${analysisDuration.inSeconds}秒）\n'
+            '未检测到明显的跳跃动作\n'
+            '建议：确保视频中包含完整的跳跃过程',
+            Colors.blue,
+          );
+        } else {
+          // 计算统计数据
+          final double avgHeight =
+              _jumpResults.map((r) => r.jumpHeight).reduce((a, b) => a + b) /
+              _jumpResults.length;
+
+          final double maxHeight = _jumpResults
+              .map((r) => r.jumpHeight)
+              .reduce((a, b) => a > b ? a : b);
+
+          _updateStatus(
+            '✅ 分析完成（耗时 ${analysisDuration.inSeconds}秒）\n'
+            '共发现 ${_jumpResults.length} 次跳跃\n'
+            '平均高度: ${avgHeight.toStringAsFixed(1)}像素 | '
+            '最高: ${maxHeight.toStringAsFixed(1)}像素',
+            Colors.green,
+          );
+
+          // 自动跳转到第一次跳跃
+          if (_jumpResults.isNotEmpty) {
+            await _seekToJump(_jumpResults.first.timestamp);
+          }
+        }
+      }
+    } catch (e) {
+      // ========== 5. 错误处理 ==========
+      print('视频分析严重错误: $e');
+
+      if (mounted) {
+        setState(() => _isAnalyzingVideo = false);
+        _updateStatus(
+          '分析失败: ${e.toString().split('\n').first}\n'
+          '请确保视频格式支持或尝试更短的视频',
+          Colors.red,
+        );
+      }
+    }
+  }
+
+  /// 获取视频文件路径
+  String? _getVideoPath() {
+    // 方法1：直接返回保存的路径
+    if (_selectedVideoPath != null && File(_selectedVideoPath!).existsSync()) {
+      return _selectedVideoPath;
+    }
+
+    if (_videoController == null) return null;
+
+    final String dataSource = _videoController!.dataSource;
+
+    print('[jc] dataSource = $dataSource');
+
+    String? videoPath;
+
+    // 判断数据源类型
+    if (dataSource.startsWith('file://')) {
+      // 文件路径，去除'file://'前缀
+      videoPath = dataSource.substring(7);
+    } else if (dataSource.startsWith('/')) {
+      // 绝对路径
+      videoPath = dataSource;
+    } else if (!dataSource.contains('://')) {
+      // 可能是相对路径
+      videoPath = dataSource;
+    } else {
+      // 其他情况（如网络视频：http://, https://）
+      videoPath = null;
+    }
+    print('[jc] videoPath = $videoPath');
+
+    return videoPath;
+  }
+
+  /// 使用video_thumbnail提取视频帧
+  Future<ui.Image?> _getVideoFrameAtPosition(
+    String videoPath,
+    Duration position, {
+    int quality = 75,
+    int maxWidth = 640,
+  }) async {
+    try {
+      final Uint8List? uint8List = await thumbnail.VideoThumbnail.thumbnailData(
+        video: videoPath,
+        imageFormat: thumbnail.ImageFormat.JPEG,
+        timeMs: position.inMilliseconds,
+        quality: quality,
+        maxWidth: maxWidth,
+      );
+
+      if (uint8List == null || uint8List.isEmpty) {
+        return null;
+      }
+
+      final ui.Codec codec = await ui.instantiateImageCodec(uint8List);
+      final ui.FrameInfo frameInfo = await codec.getNextFrame();
+      return frameInfo.image;
+    } catch (e) {
+      print('提取视频帧失败 [${position.inMilliseconds}ms]: $e');
+      return null;
+    }
+  }
+
+  /// 将ui.Image转换为InputImage
+  Future<InputImage?> _convertVideoFrameToInputImage(
+    ui.Image videoFrame,
+  ) async {
+    try {
+      final int width = videoFrame.width;
+      final int height = videoFrame.height;
+
+      final ByteData? byteData = await videoFrame.toByteData(
+        format: ui.ImageByteFormat.rawRgba,
+      );
+
+      // final byteData = await videoFrame.toByteData(format: ui.ImageByteFormat.png);
+
+      if (byteData == null) return null;
+
+      final Uint8List bytes = byteData.buffer.asUint8List();
+
+      return InputImage.fromBytes(
+        bytes: bytes,
+        metadata: InputImageMetadata(
+          size: Size(width.toDouble(), height.toDouble()),
+          rotation: InputImageRotation.rotation0deg,
+          format: InputImageFormat.bgra8888,
+          bytesPerRow: width * 4,
+        ),
+      );
+    } catch (e) {
+      print('图像转换失败: $e');
+      return null;
+    }
+  }
+
+  /// 捕获帧并保存为快照
+  Future<File?> _captureFrameSnapshot(
+    String videoPath,
+    Duration timestamp,
+    double jumpHeight,
+  ) async {
+    try {
+      // 为跳跃时刻生成稍高质量的缩略图
+      final Uint8List? uint8List = await thumbnail.VideoThumbnail.thumbnailData(
+        video: videoPath,
+        imageFormat: thumbnail.ImageFormat.PNG,
+        timeMs: timestamp.inMilliseconds,
+        quality: 90,
+        maxWidth: 320,
+      );
+
+      if (uint8List == null) return null;
+
+      final Directory appDir = await getApplicationDocumentsDirectory();
+      final String filename =
+          'jump_${timestamp.inMilliseconds}_${jumpHeight.toStringAsFixed(0)}px.png';
+      final File file = File('${appDir.path}/jump_snapshots/$filename');
+
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(uint8List);
+
+      print('跳跃快照已保存: ${file.path}');
+      return file;
+    } catch (e) {
+      print('保存快照失败: $e');
+      return null;
+    }
+  }
+
+  /// 计算跳跃高度（当前为简化版，未来可添加相机标定等逻辑）
+  double _calculateJumpHeight(double baseline, double currentAnkleY) {
+    // 当前：简单的像素差值
+    final double pixelHeight = (baseline - currentAnkleY).abs();
+
+    // 未来可以在这里添加：
+    // 1. 根据相机参数转换为真实高度（厘米/米）
+    // 2. 考虑透视校正
+    // 3. 根据人物身高进行归一化
+
+    return pixelHeight;
   }
 
   /// 获取状态图标
