@@ -1234,7 +1234,7 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
       final int height = videoFrame.height;
 
       final ByteData? byteData = await videoFrame.toByteData(
-        format: ui.ImageByteFormat.rawRgba,
+        format: ui.ImageByteFormat.png,
       );
 
       // final byteData = await videoFrame.toByteData(format: ui.ImageByteFormat.png);
@@ -1253,7 +1253,7 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
         ),
       );
     } catch (e) {
-      print('图像转换失败: $e');
+      print('[JC] 图像转换失败: $e');
       return null;
     }
   }
