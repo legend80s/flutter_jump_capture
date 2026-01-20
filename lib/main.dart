@@ -4,13 +4,14 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import 'package:path_provider/path_provider.dart'
-    show getApplicationDocumentsDirectory;
+    show getApplicationDocumentsDirectory, getExternalStorageDirectory;
 import 'package:image/image.dart' as img;
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:video_thumbnail/video_thumbnail.dart' as thumbnail;
+import 'package:permission_handler/permission_handler.dart';
 
 enum AppMode { liveCamera, videoAnalysis }
 
@@ -115,7 +116,17 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
   @override
   void initState() {
     super.initState();
+    _requestPermissions();
     _initializeCamera();
+  }
+
+  /// 请求必要的权限
+  Future<void> _requestPermissions() async {
+    if (Platform.isAndroid) {
+      // Android 10+ 不需要请求存储权限，但 Android 9 及以下需要
+      // 这里我们统一请求，确保兼容性
+      await [Permission.storage, Permission.photos].request();
+    }
   }
 
   /// 初始化相机
@@ -492,7 +503,13 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
         backgroundColor: _statusColor,
         actions: [
           PopupMenuButton<AppMode>(
-            onSelected: (mode) => _switchMode(mode),
+            onSelected: (mode) {
+              if (mode == null) {
+                _showSavedImages();
+              } else {
+                _switchMode(mode);
+              }
+            },
             itemBuilder: (context) => [
               const PopupMenuItem(
                 value: AppMode.liveCamera,
@@ -514,6 +531,17 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
                   ],
                 ),
               ),
+              const PopupMenuItem(
+                value: null,
+                child: Row(
+                  children: [
+                    Icon(Icons.photo_library, size: 20),
+                    SizedBox(width: 8),
+                    Text('查看保存的图片'),
+                  ],
+                ),
+                onTap: null, // 将在 onSelected 中处理
+              ),
             ],
             icon: const Icon(Icons.menu),
           ),
@@ -532,7 +560,7 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
   Widget _buildStatusBar() {
     return Container(
       padding: const EdgeInsets.all(12),
-      color: _statusColor.withOpacity(0.1),
+      color: _statusColor.withAlpha((_statusColor.alpha * 0.1).toInt()),
       child: Row(
         children: [
           Icon(_getStatusIcon(), color: _statusColor),
@@ -765,12 +793,49 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
       itemCount: _jumpResults.length,
       itemBuilder: (context, index) {
         final result = _jumpResults[index];
-        return ListTile(
-          leading: const Icon(Icons.arrow_upward, color: Colors.green),
-          title: Text('跳跃 ${index + 1}'),
-          subtitle: Text('时间: ${_formatDuration(result.timestamp)}'),
-          trailing: Text('${result.jumpHeight.toStringAsFixed(1)}像素'),
-          onTap: () => _seekToJump(result.timestamp),
+        return Card(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: ListTile(
+            leading: result.snapshot != null && result.snapshot!.existsSync()
+                ? Container(
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      image: DecorationImage(
+                        image: FileImage(result.snapshot!),
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  )
+                : Container(
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[300],
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(
+                      Icons.image_not_supported,
+                      color: Colors.grey,
+                    ),
+                  ),
+            title: Text('跳跃 ${index + 1}'),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('时间: ${_formatDuration(result.timestamp)}'),
+                Text('高度: ${result.jumpHeight.toStringAsFixed(1)}像素'),
+                if (result.snapshot != null && result.snapshot!.existsSync())
+                  Text(
+                    '已保存到相册',
+                    style: TextStyle(fontSize: 12, color: Colors.green),
+                  ),
+              ],
+            ),
+            trailing: const Icon(Icons.play_arrow),
+            onTap: () => _seekToJump(result.timestamp),
+          ),
         );
       },
     );
@@ -1055,17 +1120,19 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
                       final double jumpHeight = heightDiff;
 
                       // 保存结果
-                      _jumpResults.add(
-                        VideoJumpResult(
-                          position,
-                          jumpHeight,
-                          await _captureFrameSnapshot(
-                            videoPath,
-                            position,
-                            jumpHeight,
-                          ),
-                        ),
+                      final snapshotFile = await _captureFrameSnapshot(
+                        videoPath,
+                        position,
+                        jumpHeight,
                       );
+
+                      final result = VideoJumpResult(
+                        position,
+                        jumpHeight,
+                        snapshotFile,
+                      );
+
+                      _jumpResults.add(result);
 
                       // 实时反馈
                       if (mounted) {
@@ -1073,6 +1140,23 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
                           '发现第$jumpCount次跳跃！高度: ${jumpHeight.toStringAsFixed(1)}像素',
                           Colors.green,
                         );
+
+                        // 显示图片保存路径
+                        if (snapshotFile != null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('跳跃快照已保存到相册: ${snapshotFile.path}'),
+                              duration: const Duration(seconds: 3),
+                              action: SnackBarAction(
+                                label: '查看',
+                                onPressed: () {
+                                  // 这里可以添加打开图片查看器的功能
+                                  _showImagePreview(snapshotFile.path);
+                                },
+                              ),
+                            ),
+                          );
+                        }
                       }
                     }
                   }
@@ -1327,7 +1411,69 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
     return nv21Bytes;
   }
 
-  /// 捕获帧并保存为快照
+  /// 显示图片预览对话框
+  void _showImagePreview(String imagePath) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return Dialog(
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('跳跃快照', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 16),
+                Container(
+                  width: 300,
+                  height: 400,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    image: DecorationImage(
+                      image: FileImage(File(imagePath)),
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  '保存路径:',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                Text(
+                  imagePath,
+                  style: TextStyle(fontSize: 10),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('关闭'),
+                    ),
+                    FilledButton.icon(
+                      onPressed: () {
+                        // 这里可以添加分享功能
+                        Navigator.of(context).pop();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('分享功能开发中...')),
+                        );
+                      },
+                      icon: const Icon(Icons.share, size: 16),
+                      label: const Text('分享'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<File?> _captureFrameSnapshot(
     String videoPath,
     Duration timestamp,
@@ -1345,12 +1491,23 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
 
       if (uint8List == null) return null;
 
-      final Directory appDir = await getApplicationDocumentsDirectory();
+      final Directory appDir =
+          await getExternalStorageDirectory() ??
+          await getApplicationDocumentsDirectory();
+
+      // 在 Android 上，使用 Pictures 目录
+      Directory picturesDir;
+      if (Platform.isAndroid) {
+        picturesDir = Directory('/storage/emulated/0/Pictures/JumpCapture');
+      } else {
+        picturesDir = Directory('${appDir.path}/JumpCapture');
+      }
+
       final String filename =
           'jump_${timestamp.inMilliseconds}_${jumpHeight.toStringAsFixed(0)}px.png';
-      final File file = File('${appDir.path}/jump_snapshots/$filename');
+      final File file = File('${picturesDir.path}/$filename');
 
-      await file.parent.create(recursive: true);
+      await picturesDir.create(recursive: true);
       await file.writeAsBytes(uint8List);
 
       print('跳跃快照已保存: ${file.path}');
@@ -1358,6 +1515,144 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
     } catch (e) {
       print('保存快照失败: $e');
       return null;
+    }
+  }
+
+  /// 显示所有保存的图片
+  void _showSavedImages() async {
+    final List<File> images = await _getSavedJumpImages();
+
+    if (!mounted) return;
+
+    if (images.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('暂无保存的图片')));
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return Dialog(
+          child: Container(
+            width: double.maxFinite,
+            height: 400,
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                Text(
+                  '保存的跳跃图片 (${images.length}张)',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 16),
+                Expanded(
+                  child: GridView.builder(
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2,
+                          childAspectRatio: 0.75,
+                          crossAxisSpacing: 8,
+                          mainAxisSpacing: 8,
+                        ),
+                    itemCount: images.length,
+                    itemBuilder: (context, index) {
+                      final file = images[index];
+                      return GestureDetector(
+                        onTap: () => _showImagePreview(file.path),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.grey[300]!),
+                          ),
+                          child: Column(
+                            children: [
+                              Expanded(
+                                child: ClipRRect(
+                                  borderRadius: const BorderRadius.vertical(
+                                    top: Radius.circular(8),
+                                  ),
+                                  child: Image.file(
+                                    file,
+                                    fit: BoxFit.cover,
+                                    width: double.infinity,
+                                  ),
+                                ),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.all(4),
+                                child: Text(
+                                  _formatFileName(file.path),
+                                  style: const TextStyle(fontSize: 10),
+                                  textAlign: TextAlign.center,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('关闭'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// 格式化文件名显示
+  String _formatFileName(String path) {
+    final fileName = path.split('/').last;
+    // 从 jump_1234567890_39px.png 中提取高度信息
+    final match = RegExp(r'jump_(\d+)_(\d+)px\.png').firstMatch(fileName);
+    if (match != null) {
+      final height = match.group(2);
+      return '跳跃 ${height}px';
+    }
+    return fileName;
+  }
+
+  Future<List<File>> _getSavedJumpImages() async {
+    try {
+      final Directory appDir =
+          await getExternalStorageDirectory() ??
+          await getApplicationDocumentsDirectory();
+
+      Directory picturesDir;
+      if (Platform.isAndroid) {
+        picturesDir = Directory('/storage/emulated/0/Pictures/JumpCapture');
+      } else {
+        picturesDir = Directory('${appDir.path}/JumpCapture');
+      }
+
+      if (await picturesDir.exists()) {
+        final List<FileSystemEntity> files = await picturesDir.list().toList();
+        return files
+            .whereType<File>()
+            .where((file) => file.path.endsWith('.png'))
+            .toList()
+          ..sort(
+            (a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()),
+          );
+      }
+      return [];
+    } catch (e) {
+      print('获取保存的图片失败: $e');
+      return [];
     }
   }
 
