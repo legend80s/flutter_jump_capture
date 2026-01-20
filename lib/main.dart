@@ -1001,20 +1001,27 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
 
               if (leftAnkle != null && rightAnkle != null) {
                 final double currentAnkleY = (leftAnkle.y + rightAnkle.y) / 2.0;
+                print(
+                  '[JC] 帧 $processedFrames: 左脚踝=${leftAnkle.y.toStringAsFixed(3)}, 右脚踝=${rightAnkle.y.toStringAsFixed(3)}, 平均=${currentAnkleY.toStringAsFixed(3)}',
+                );
 
                 // 3.4 跳跃检测逻辑
                 if (!isCalibrated) {
-                  // 校准阶段：前1.5秒用于校准
-                  if (second < 1.5) {
+                  // 校准阶段：前3秒用于校准（每秒3帧，共9帧）
+                  if (second < 3) {
                     ankleSamples.add(currentAnkleY);
+                    print('[JC] 校准中: 收集样本 ${ankleSamples.length}/8');
 
                     // 收集足够样本后计算基线
                     if (ankleSamples.length >= 8) {
-                      // 约1.5秒的数据
+                      // 约2.7秒的数据
                       groundBaseline =
                           ankleSamples.reduce((a, b) => a + b) /
                           ankleSamples.length;
                       isCalibrated = true;
+                      print(
+                        '[JC] 校准完成！基线: ${groundBaseline.toStringAsFixed(3)}',
+                      );
                       _updateStatus(
                         '校准完成！基线: ${groundBaseline.toStringAsFixed(1)}',
                         Colors.green,
@@ -1026,6 +1033,9 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
                   final double heightDiff = _calculateJumpHeight(
                     groundBaseline,
                     currentAnkleY,
+                  );
+                  print(
+                    '[JC] 检测中: 基线=${groundBaseline.toStringAsFixed(3)}, 当前=${currentAnkleY.toStringAsFixed(3)}, 高度差=${heightDiff.toStringAsFixed(3)}, 阈值=$_jumpThreshold',
                   );
 
                   // 跳跃判断条件：脚踝显著高于基线，且保持一定连续性
@@ -1111,7 +1121,7 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
 
         if (_jumpResults.isEmpty) {
           _updateStatus(
-            '分析完成（耗时 ${analysisDuration.inSeconds}秒）\n'
+            '分析完成（耗时 ${analysisDuration.inSeconds} 秒）\n'
             '未检测到明显的跳跃动作\n'
             '建议：确保视频中包含完整的跳跃过程',
             Colors.blue,
