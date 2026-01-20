@@ -819,7 +819,7 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           // 大图标
-          const SizedBox(height: 20),
+          const SizedBox(height: 40),
           Icon(Icons.video_library, size: 80, color: Colors.grey[400]),
           const SizedBox(height: 20),
 
@@ -839,7 +839,7 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
             style: TextStyle(fontSize: 14, color: Colors.grey[500]),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 30),
+          const SizedBox(height: 100),
 
           // 选择视频按钮（直接放在占位图中也很方便）
           FilledButton.icon(
@@ -847,15 +847,6 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
             icon: const Icon(Icons.upload_file),
             label: const Text('选择视频文件'),
           ),
-
-          // 或者使用更视觉化的按钮
-          // OutlinedButton(
-          //   onPressed: _pickVideo,
-          //   child: const Padding(
-          //     padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          //     child: Text('选择要分析的视频'),
-          //   ),
-          // ),
         ],
       ),
     );
@@ -1078,9 +1069,11 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
                 }
               }
             }
-          } catch (e) {
+          } catch (e, stackTrace) {
             print('姿态检测失败（帧 $processedFrames）: $e');
             // 单个帧失败不影响整体分析
+            print('详细堆栈:');
+            print(stackTrace.toString());
           }
 
           // 3.5 更新进度
@@ -1234,28 +1227,94 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
       final int height = videoFrame.height;
 
       final ByteData? byteData = await videoFrame.toByteData(
-        format: ui.ImageByteFormat.png,
+        format: ui.ImageByteFormat.rawRgba,
       );
-
-      // final byteData = await videoFrame.toByteData(format: ui.ImageByteFormat.png);
 
       if (byteData == null) return null;
 
-      final Uint8List bytes = byteData.buffer.asUint8List();
+      final Uint8List rgbaBytes = byteData.buffer.asUint8List();
 
-      return InputImage.fromBytes(
-        bytes: bytes,
-        metadata: InputImageMetadata(
-          size: Size(width.toDouble(), height.toDouble()),
-          rotation: InputImageRotation.rotation0deg,
-          format: InputImageFormat.bgra8888,
-          bytesPerRow: width * 4,
-        ),
-      );
+      if (Platform.isAndroid) {
+        final Uint8List nv21Bytes = _convertRGBAToNV21(
+          rgbaBytes,
+          width,
+          height,
+        );
+
+        return InputImage.fromBytes(
+          bytes: nv21Bytes,
+          metadata: InputImageMetadata(
+            size: Size(width.toDouble(), height.toDouble()),
+            rotation: InputImageRotation.rotation0deg,
+            format: InputImageFormat.nv21,
+            bytesPerRow: width,
+          ),
+        );
+      } else {
+        final Uint8List bgraBytes = _convertRGBAToBGRA(rgbaBytes);
+
+        return InputImage.fromBytes(
+          bytes: bgraBytes,
+          metadata: InputImageMetadata(
+            size: Size(width.toDouble(), height.toDouble()),
+            rotation: InputImageRotation.rotation0deg,
+            format: InputImageFormat.bgra8888,
+            bytesPerRow: width * 4,
+          ),
+        );
+      }
     } catch (e) {
       print('[JC] 图像转换失败: $e');
       return null;
     }
+  }
+
+  Uint8List _convertRGBAToBGRA(Uint8List rgbaBytes) {
+    final Uint8List bgraBytes = Uint8List(rgbaBytes.length);
+    for (int i = 0; i < rgbaBytes.length; i += 4) {
+      bgraBytes[i] = rgbaBytes[i + 2];
+      bgraBytes[i + 1] = rgbaBytes[i + 1];
+      bgraBytes[i + 2] = rgbaBytes[i];
+      bgraBytes[i + 3] = rgbaBytes[i + 3];
+    }
+    return bgraBytes;
+  }
+
+  Uint8List _convertRGBAToNV21(Uint8List rgbaBytes, int width, int height) {
+    final int yuvSize = width * height + (width * height ~/ 2);
+    final Uint8List nv21Bytes = Uint8List(yuvSize);
+
+    int yIndex = 0;
+    int uvIndex = width * height;
+
+    for (int j = 0; j < height; j++) {
+      for (int i = 0; i < width; i++) {
+        final int index = (j * width + i) * 4;
+        final int r = rgbaBytes[index];
+        final int g = rgbaBytes[index + 1];
+        final int b = rgbaBytes[index + 2];
+
+        final int y = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
+        nv21Bytes[yIndex++] = y.clamp(0, 255);
+      }
+    }
+
+    for (int j = 0; j < height ~/ 2; j++) {
+      for (int i = 0; i < width ~/ 2; i++) {
+        final int index = (j * 2 * width + i * 2) * 4;
+        final int r = rgbaBytes[index];
+        final int g = rgbaBytes[index + 1];
+        final int b = rgbaBytes[index + 2];
+
+        final int u = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
+        final int v = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
+
+        nv21Bytes[uvIndex++] = v;
+        nv21Bytes[uvIndex++] = u;
+      }
+    }
+
+    return nv21Bytes;
   }
 
   /// 捕获帧并保存为快照
