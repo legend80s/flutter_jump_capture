@@ -737,7 +737,20 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
       return;
     }
 
-    if (_currentMode == newMode) return; // 已经是目标模式
+    if (_currentMode == newMode) {
+      // 如果已经是视频分析模式，重置状态让用户可以选择其他视频
+      if (newMode == AppMode.videoAnalysis) {
+        print('[JC] 重置视频分析模式状态');
+        setState(() {
+          // 清理当前模式资源
+          _cleanupCurrentMode();
+
+          // 重新初始化视频分析模式
+          _initializeNewMode(newMode);
+        });
+      }
+      return;
+    }
 
     setState(() {
       // 清理当前模式资源
@@ -762,8 +775,12 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
         _resetCaptureState();
         break;
       case AppMode.videoAnalysis:
-        // 停止视频播放
+        // 停止视频播放并释放控制器
         _videoController?.pause();
+        _videoController?.dispose();
+        _videoController = null;
+        // 重置视频初始化状态
+        _isVideoInitialized = false;
         // 清理视频分析状态
         _isAnalyzingVideo = false;
         _videoAnalysisProgress = 0.0;
