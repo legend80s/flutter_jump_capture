@@ -1107,18 +1107,47 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
 
                   // 跳跃判断条件：脚踝显著高于基线，且保持一定连续性
                   if (heightDiff > _jumpThreshold &&
-                      // 基线 750 如果超过了 2/3 则认为是误判，因为不可能跳过 2/3 屏幕高度
-                      heightDiff < groundBaseline * (2 / 3)) {
+                      // 限制最大跳跃高度，避免误判（基于阈值的合理倍数）
+                      heightDiff < _jumpThreshold * 15) {
                     // 限制最大差异避免误判
-                    // 检查是否是新的跳跃（避免同一跳跃多次记录）
-                    final bool isNewJump =
-                        _jumpResults.isEmpty ||
-                        (position - _jumpResults.last.timestamp)
-                                .inMilliseconds >
-                            500;
+                    // 检查是否是新的跳跃（改进的跳跃检测逻辑）
+                    final bool isNewJump;
+                    if (_jumpResults.isEmpty) {
+                      isNewJump = true;
+                      print(
+                        '[JC] 跳跃检测: 首次跳跃，高度=${heightDiff.toStringAsFixed(3)}px',
+                      );
+                    } else {
+                      final timeDiff = (position - _jumpResults.last.timestamp)
+                          .inMilliseconds;
+                      final lastJumpHeight = _jumpResults.last.jumpHeight;
+
+                      // 改进的跳跃检测逻辑：
+                      // 1. 时间间隔超过1000ms认为是新跳跃
+                      // 2. 或者当前跳跃高度比上次高至少20%（记录更高的跳跃）
+                      final bool isTimeBasedNewJump = timeDiff > 1000;
+                      final bool isHeightBasedNewJump =
+                          heightDiff > lastJumpHeight * 1.2;
+
+                      isNewJump = isTimeBasedNewJump || isHeightBasedNewJump;
+
+                      print(
+                        '[JC] 跳跃检测: 高度=${heightDiff.toStringAsFixed(3)}px, 时间差=${timeDiff}ms, 上次高度=${lastJumpHeight.toStringAsFixed(3)}px',
+                      );
+                      print(
+                        '[JC] 跳跃检测: 时间间隔新跳跃=$isTimeBasedNewJump, 高度提升新跳跃=$isHeightBasedNewJump, 最终=$isNewJump',
+                      );
+
+                      if (!isNewJump) {
+                        print('[JC] 跳跃忽略: 不满足新跳跃条件');
+                      }
+                    }
 
                     if (isNewJump) {
                       jumpCount++;
+                      print(
+                        '[JC] ✅ 跳跃记录: 跳跃次数=$jumpCount, 高度=${heightDiff.toStringAsFixed(3)}px',
+                      );
 
                       // 计算跳跃高度（像素单位）
                       final double jumpHeight = heightDiff;
