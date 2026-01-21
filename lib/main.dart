@@ -12,6 +12,9 @@ import 'package:video_player/video_player.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:video_thumbnail/video_thumbnail.dart' as thumbnail;
 import 'package:permission_handler/permission_handler.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:android_intent_plus/android_intent.dart';
+import 'package:android_intent_plus/flag.dart';
 
 enum AppMode { liveCamera, videoAnalysis }
 
@@ -1586,11 +1589,16 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
                 ),
                 const SizedBox(height: 16),
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     TextButton(
                       onPressed: () => Navigator.of(context).pop(),
                       child: const Text('关闭'),
+                    ),
+                    FilledButton.icon(
+                      onPressed: _openSaveFolder,
+                      icon: const Icon(Icons.folder_open),
+                      label: const Text('前往保存文件夹查看'),
                     ),
                   ],
                 ),
@@ -1701,6 +1709,94 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
       }
     } catch (e) {
       print('保存最高跳跃照片失败: $e');
+    }
+  }
+
+  /// 获取保存目录
+  Future<Directory?> _getSaveDirectory() async {
+    if (Platform.isAndroid) {
+      return Directory('/storage/emulated/0/Pictures/JumpCapture');
+    } else {
+      final appDir =
+          await getExternalStorageDirectory() ??
+          await getApplicationDocumentsDirectory();
+      return Directory('${appDir.path}/JumpCapture');
+    }
+  }
+
+  /// 打开保存文件夹
+  Future<void> _openSaveFolder() async {
+    try {
+      final directory = await _getSaveDirectory();
+      if (directory == null || !await directory.exists()) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('保存文件夹不存在')));
+        }
+        return;
+      }
+
+      if (Platform.isAndroid) {
+        // Android 使用 Intent
+        openFolderForAndroid(directory);
+      } else {
+        // iOS 使用 URL Launcher
+        final uri = Uri.directory(directory.path);
+        if (await canLaunchUrl(uri)) {
+          await launchUrl(uri);
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('无法打开文件夹')));
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('打开文件夹失败: $e')));
+      }
+    }
+  }
+
+  Future<void> openFolderForAndroid(Directory directory) async {
+    try {
+      final intent = AndroidIntent(
+        action: 'android.intent.action.VIEW',
+        data: Uri.encodeFull('file://${directory.path}'),
+        type: 'resource/folder',
+        flags: [Flag.FLAG_ACTIVITY_NEW_TASK],
+      );
+      await intent.launch();
+    } catch (e) {
+      // 如果还失败，降级到 content://
+      await openFolderFallback(directory);
+    }
+  }
+
+  // 降级方案
+  Future<void> openFolderFallback(Directory directory) async {
+    try {
+      // 转换路径为 content:// URI
+      final path = directory.path.replaceFirst(
+        '/storage/emulated/0/',
+        'primary:',
+      );
+
+      final intent = AndroidIntent(
+        action: 'android.intent.action.VIEW',
+        data: Uri.encodeFull(
+          'content://com.android.externalstorage.documents/tree/$path',
+        ),
+        flags: [Flag.FLAG_ACTIVITY_NEW_TASK],
+      );
+      await intent.launch();
+    } catch (e) {
+      print('打开文件夹失败: $e');
+      rethrow;
     }
   }
 
