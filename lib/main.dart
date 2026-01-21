@@ -80,13 +80,14 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
   AppMode _currentMode = AppMode.liveCamera; // 默认模式
 
   // --- 视频分析模式相关 ---
-  String? _selectedVideoPath; // 保存用户选择的视频路径
-
+  String? _selectedVideoPath; // --- 视频分析 ---
   VideoPlayerController? _videoController;
   bool _isVideoInitialized = false;
   bool _isAnalyzingVideo = false;
   double _videoAnalysisProgress = 0.0;
   List<VideoJumpResult> _jumpResults = []; // 存储分析结果
+  List<VideoJumpResult> _savedJumps = []; // 保存的跳跃结果（按高度排序）
+  static const int maxSavedJumps = 3; // 最多保存3张最高跳跃的图片
   // ----------------------
 
   // --- 姿态检测 ---
@@ -1119,17 +1120,11 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
                       // 计算跳跃高度（像素单位）
                       final double jumpHeight = heightDiff;
 
-                      // 保存结果
-                      final snapshotFile = await _captureFrameSnapshot(
-                        videoPath,
-                        position,
-                        jumpHeight,
-                      );
-
+                      // 创建跳跃结果（不立即保存图片）
                       final result = VideoJumpResult(
                         position,
                         jumpHeight,
-                        snapshotFile,
+                        null, // 先不保存图片
                       );
 
                       _jumpResults.add(result);
@@ -1140,23 +1135,6 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
                           '发现第$jumpCount次跳跃！高度: ${jumpHeight.toStringAsFixed(1)}像素',
                           Colors.green,
                         );
-
-                        // 显示图片保存路径
-                        if (snapshotFile != null) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('跳跃快照已保存到相册: ${snapshotFile.path}'),
-                              duration: const Duration(seconds: 3),
-                              action: SnackBarAction(
-                                label: '查看',
-                                onPressed: () {
-                                  // 这里可以添加打开图片查看器的功能
-                                  _showImagePreview(snapshotFile.path);
-                                },
-                              ),
-                            ),
-                          );
-                        }
                       }
                     }
                   }
@@ -1227,6 +1205,9 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
             '最高: ${maxHeight.toStringAsFixed(1)}像素',
             Colors.green,
           );
+
+          // 保存跳跃高度最高的前3张照片
+          await _saveTopJumpSnapshots(videoPath);
 
           // 自动跳转到第一次跳跃
           if (_jumpResults.isNotEmpty) {
@@ -1478,6 +1459,7 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
     String videoPath,
     Duration timestamp,
     double jumpHeight,
+    int rank, // 跳跃排名（1, 2, 3）
   ) async {
     try {
       // 为跳跃时刻生成稍高质量的缩略图
@@ -1503,14 +1485,21 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
         picturesDir = Directory('${appDir.path}/JumpCapture');
       }
 
+      // 生成新的文件名格式：jump_序号_年月日-时分秒毫秒_高度px.png
+      final now = DateTime.now();
+      final String timestampStr =
+          '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-'
+          '${now.hour.toString().padLeft(2, '0')}h${now.minute.toString().padLeft(2, '0')}m'
+          '${now.second.toString().padLeft(2, '0')}s${now.millisecond.toString().padLeft(3, '0')}ms';
+
       final String filename =
-          'jump_${timestamp.inMilliseconds}_${jumpHeight.toStringAsFixed(0)}px.png';
+          'jump_${rank}_${timestampStr}_${jumpHeight.toStringAsFixed(0)}px.png';
       final File file = File('${picturesDir.path}/$filename');
 
       await picturesDir.create(recursive: true);
       await file.writeAsBytes(uint8List);
 
-      print('跳跃快照已保存: ${file.path}');
+      print('✅ 跳跃快照已保存: ${file.path}');
       return file;
     } catch (e) {
       print('保存快照失败: $e');
@@ -1617,11 +1606,14 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
   /// 格式化文件名显示
   String _formatFileName(String path) {
     final fileName = path.split('/').last;
-    // 从 jump_1234567890_39px.png 中提取高度信息
-    final match = RegExp(r'jump_(\d+)_(\d+)px\.png').firstMatch(fileName);
+    // 从 jump_1_20260120-17h36m4s330ms_39px.png 中提取信息
+    final match = RegExp(
+      r'jump_(\d+)_(\d{8}-\d{2}h\d{2}m\d{2}s\d{3}ms)_(\d+)px\.png',
+    ).firstMatch(fileName);
     if (match != null) {
-      final height = match.group(2);
-      return '跳跃 ${height}px';
+      final rank = match.group(1);
+      final height = match.group(3);
+      return '第${rank}高 (${height}px)';
     }
     return fileName;
   }
@@ -1653,6 +1645,61 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
     } catch (e) {
       print('获取保存的图片失败: $e');
       return [];
+    }
+  }
+
+  /// 保存跳跃高度最高的前3张照片
+  Future<void> _saveTopJumpSnapshots(String videoPath) async {
+    try {
+      // 按跳跃高度降序排序
+      final sortedJumps = List<VideoJumpResult>.from(_jumpResults)
+        ..sort((a, b) => b.jumpHeight.compareTo(a.jumpHeight));
+
+      // 只保存前3张
+      final topJumps = sortedJumps.take(maxSavedJumps).toList();
+
+      for (int i = 0; i < topJumps.length; i++) {
+        final jump = topJumps[i];
+        final rank = i + 1;
+
+        // 生成新的文件名
+        final snapshotFile = await _captureFrameSnapshot(
+          videoPath,
+          jump.timestamp,
+          jump.jumpHeight,
+          rank,
+        );
+
+        if (snapshotFile != null) {
+          // 更新结果中的文件引用
+          final index = _jumpResults.indexOf(jump);
+          if (index != -1) {
+            _jumpResults[index] = VideoJumpResult(
+              jump.timestamp,
+              jump.jumpHeight,
+              snapshotFile,
+            );
+          }
+
+          // 添加到保存列表
+          _savedJumps.add(
+            VideoJumpResult(jump.timestamp, jump.jumpHeight, snapshotFile),
+          );
+
+          print('✅ 保存第${rank}高跳跃照片: ${snapshotFile.path}');
+        }
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已保存最高 ${topJumps.length} 张跳跃照片'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      print('保存最高跳跃照片失败: $e');
     }
   }
 
