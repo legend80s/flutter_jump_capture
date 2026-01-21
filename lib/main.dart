@@ -1227,9 +1227,16 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
           // 保存跳跃高度最高的前3张照片
           await _saveTopJumpSnapshots(videoPath);
 
-          // 自动跳转到第一次跳跃
+          // 自动跳转到最高跳跃
           if (_jumpResults.isNotEmpty) {
-            await _seekToJump(_jumpResults.first.timestamp);
+            // 找到高度最高的跳跃
+            final highestJump = _jumpResults.reduce(
+              (a, b) => a.jumpHeight > b.jumpHeight ? a : b,
+            );
+            print(
+              '[JC] 自动跳转到最高跳跃: 高度=${highestJump.jumpHeight.toStringAsFixed(3)}px',
+            );
+            await _seekToJump(highestJump.timestamp);
           }
         }
       }
