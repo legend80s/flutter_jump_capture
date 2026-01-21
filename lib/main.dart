@@ -505,11 +505,7 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
         actions: [
           PopupMenuButton<AppMode>(
             onSelected: (mode) {
-              if (mode == null) {
-                _showSavedImages();
-              } else {
-                _switchMode(mode);
-              }
+              _switchMode(mode);
             },
             itemBuilder: (context) => [
               const PopupMenuItem(
@@ -532,7 +528,7 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
                   ],
                 ),
               ),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: null,
                 child: Row(
                   children: [
@@ -541,7 +537,10 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
                     Text('查看保存的图片'),
                   ],
                 ),
-                onTap: null, // 将在 onSelected 中处理
+                onTap: () {
+                  // 直接在这里调用，不依赖 onSelected
+                  _showSavedImages();
+                },
               ),
             ],
             icon: const Icon(Icons.menu),
@@ -1633,13 +1632,15 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
 
       if (await picturesDir.exists()) {
         final List<FileSystemEntity> files = await picturesDir.list().toList();
-        return files
-            .whereType<File>()
-            .where((file) => file.path.endsWith('.png'))
-            .toList()
-          ..sort(
-            (a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()),
-          );
+        final List<File> imageFiles =
+            files
+                .whereType<File>()
+                .where((file) => file.path.endsWith('.png'))
+                .toList()
+              ..sort(
+                (a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()),
+              );
+        return imageFiles;
       }
       return [];
     } catch (e) {
