@@ -696,12 +696,22 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
               ),
               const SizedBox(width: 20),
 
-              // 分析按钮
+              // 分析和选择视频按钮
               if (!_isAnalyzingVideo)
-                FilledButton.icon(
-                  onPressed: _analyzeVideo,
-                  icon: const Icon(Icons.analytics),
-                  label: const Text('分析视频'),
+                Row(
+                  children: [
+                    FilledButton.icon(
+                      onPressed: _analyzeVideo,
+                      icon: const Icon(Icons.analytics),
+                      label: const Text('分析视频'),
+                    ),
+                    const SizedBox(width: 12),
+                    OutlinedButton.icon(
+                      onPressed: _pickVideo,
+                      icon: const Icon(Icons.video_file),
+                      label: const Text('选择其他视频'),
+                    ),
+                  ],
                 )
               else
                 OutlinedButton(
