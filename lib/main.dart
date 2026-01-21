@@ -104,14 +104,13 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
 
   // --- 地面基线校准 ---
   static const int _calibrationFrameCount = 30; // 校准采样帧数
-  List<double> _ankleSamples = []; // 脚踝Y坐标采样列表
+  final List<double> _ankleSamples = []; // 脚踝Y坐标采样列表
   double _groundBaseline = 0.0; // 计算得到的地面基线
-  double _jumpThreshold = 25.0; // 离地判断阈值（像素）
+  final double _jumpThreshold = 25.0; // 离地判断阈值（像素）
 
   // --- 帧缓存（用于回溯保存最佳帧）---
   static const int cacheFrameCount = 15; // 缓存最近N帧（约0.5秒@30fps）
   List<CameraImage> _frameCache = [];
-  final List<Completer<CameraImage?>> _captureCompleters = [];
 
   // --- UI反馈 ---
   String _statusText = '准备就绪';
@@ -1107,7 +1106,9 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
                   );
 
                   // 跳跃判断条件：脚踝显著高于基线，且保持一定连续性
-                  if (heightDiff > _jumpThreshold && heightDiff < 150) {
+                  if (heightDiff > _jumpThreshold &&
+                      // 基线 750 如果超过了 2/3 则认为是误判，因为不可能跳过 2/3 屏幕高度
+                      heightDiff < groundBaseline * (2 / 3)) {
                     // 限制最大差异避免误判
                     // 检查是否是新的跳跃（避免同一跳跃多次记录）
                     final bool isNewJump =
