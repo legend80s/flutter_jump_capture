@@ -14,8 +14,24 @@ import 'package:video_thumbnail/video_thumbnail.dart' as thumbnail;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'jump_detector.dart' show JumpDetector;
+import 'toast.dart' show showStyledSnackBar, MessageType;
 
 enum AppMode { liveCamera, videoAnalysis }
+
+enum Level {
+  // debug(100),
+  info(200),
+  warning(300),
+  error(400),
+  fatal(500),
+  success(600);
+
+  final int value;
+  // final String name;
+  // final String emoji;
+
+  const Level(this.value);
+}
 
 // 全局变量，用于在main函数中获取相机列表
 List<CameraDescription> cameras = [];
@@ -79,7 +95,7 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
   };
 
   // 模式控制
-  AppMode _currentMode = AppMode.liveCamera; // 默认模式
+  AppMode _currentMode = AppMode.videoAnalysis; // 默认模式
 
   // --- 视频分析模式相关 ---
   String? _selectedVideoPath; // --- 视频分析 ---
@@ -112,14 +128,21 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
   List<CameraImage> _frameCache = [];
 
   // --- UI反馈 ---
-  String _statusText = '准备就绪';
+  String _statusText = '';
   Color _statusColor = Colors.blue;
 
   @override
   void initState() {
     super.initState();
     _requestPermissions();
-    _initializeCamera();
+
+    switch (_currentMode) {
+      case AppMode.liveCamera:
+        _initializeCamera();
+        break;
+      case AppMode.videoAnalysis:
+        break;
+    }
   }
 
   /// 请求必要的权限
@@ -159,7 +182,7 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
       );
       _startImageStream();
       setState(() => _isCameraInitialized = true);
-      _updateStatus('点击下方按钮开始跳跃抓拍', Colors.blue);
+      print('[JC] _isCameraInitialized true 点击下方按钮开始跳跃抓拍');
     } on CameraException catch (e) {
       _updateStatus('相机初始化失败: $e', Colors.red);
     }
@@ -559,24 +582,29 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
   }
 
   Widget _buildStatusBar() {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      color: _statusColor.withAlpha((_statusColor.alpha * 0.1).toInt()),
-      child: Row(
-        children: [
-          Icon(_getStatusIcon(), color: _statusColor),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(_statusText, style: TextStyle(color: _statusColor)),
-          ),
-          if (_groundBaseline > 0)
-            Text(
-              '基线: ${_groundBaseline.toStringAsFixed(1)}',
-              style: const TextStyle(color: Colors.grey),
+    return _statusText.isEmpty
+        ? Container()
+        : Container(
+            padding: const EdgeInsets.all(12),
+            color: _statusColor.withAlpha((_statusColor.alpha * 0.1).toInt()),
+            child: Row(
+              children: [
+                Icon(_getStatusIcon(), color: _statusColor),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    _statusText,
+                    style: TextStyle(color: _statusColor),
+                  ),
+                ),
+                if (_groundBaseline > 0)
+                  Text(
+                    '基线: ${_groundBaseline.toStringAsFixed(1)}',
+                    style: const TextStyle(color: Colors.grey),
+                  ),
+              ],
             ),
-        ],
-      ),
-    );
+          );
   }
 
   Widget _buildMainContent() {
@@ -807,11 +835,11 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
         if (_controller != null && _isCameraInitialized) {
           _startImageStream();
         }
-        _updateStatus('已切换到实时相机模式', Colors.blue);
+        print('[JC] 已切换到实时相机模式');
         break;
       case AppMode.videoAnalysis:
         // 视频模式初始化
-        _updateStatus('已切换到视频分析模式，请选择视频文件', Colors.blue);
+        print('[JC] 已切换到视频分析模式，请选择视频文件');
         break;
     }
   }
@@ -976,7 +1004,10 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
     try {
       await _videoController!.initialize();
       setState(() => _isVideoInitialized = true);
-      _updateStatus('视频加载成功！点击「分析视频」开始', Colors.blue);
+
+      if (mounted) {
+        showStyledSnackBar(context, '视频加载成功！点击「分析视频」开始', MessageType.success);
+      }
     } catch (e) {
       _updateStatus('视频加载失败: $e', Colors.red);
     }
@@ -1453,7 +1484,7 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('跳跃快照', style: Theme.of(context).textTheme.titleLarge),
+                Text('跳跃快照', style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 16),
                 Container(
                   width: 300,
