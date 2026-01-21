@@ -13,8 +13,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:video_thumbnail/video_thumbnail.dart' as thumbnail;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:android_intent_plus/android_intent.dart';
-import 'package:android_intent_plus/flag.dart';
 import 'jump_detector.dart' show JumpDetector;
 
 enum AppMode { liveCamera, videoAnalysis }
@@ -1619,9 +1617,11 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
                       child: const Text('关闭'),
                     ),
                     FilledButton.icon(
-                      onPressed: _openSaveFolder,
-                      icon: const Icon(Icons.folder_open),
-                      label: const Text('前往保存文件夹查看'),
+                      onPressed: () {
+                        _openSaveFolder();
+                        Navigator.of(context).pop();
+                      },
+                      label: const Text('前往相册'),
                     ),
                   ],
                 ),
@@ -1786,40 +1786,14 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
   }
 
   Future<void> openFolderForAndroid(Directory directory) async {
-    try {
-      final intent = AndroidIntent(
-        action: 'android.intent.action.VIEW',
-        data: Uri.encodeFull('file://${directory.path}'),
-        type: 'resource/folder',
-        flags: [Flag.FLAG_ACTIVITY_NEW_TASK],
-      );
-      await intent.launch();
-    } catch (e) {
-      // 如果还失败，降级到 content://
-      await openFolderFallback(directory);
-    }
-  }
-
-  // 降级方案
-  Future<void> openFolderFallback(Directory directory) async {
-    try {
-      // 转换路径为 content:// URI
-      final path = directory.path.replaceFirst(
-        '/storage/emulated/0/',
-        'primary:',
-      );
-
-      final intent = AndroidIntent(
-        action: 'android.intent.action.VIEW',
-        data: Uri.encodeFull(
-          'content://com.android.externalstorage.documents/tree/$path',
+    // 显示提示信息，让用户到相册查看
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('请到「相册-更多相册-其他相册」查看'),
+          duration: Duration(seconds: 3),
         ),
-        flags: [Flag.FLAG_ACTIVITY_NEW_TASK],
       );
-      await intent.launch();
-    } catch (e) {
-      print('打开文件夹失败: $e');
-      rethrow;
     }
   }
 
