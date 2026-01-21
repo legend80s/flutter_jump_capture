@@ -976,7 +976,7 @@ class _JumpCaptureHomePageState extends State<JumpCaptureHomePage> {
     try {
       await _videoController!.initialize();
       setState(() => _isVideoInitialized = true);
-      _updateStatus('视频加载成功！点击"分析视频"开始', Colors.blue);
+      _updateStatus('视频加载成功！点击「分析视频」开始', Colors.blue);
     } catch (e) {
       _updateStatus('视频加载失败: $e', Colors.red);
     }
